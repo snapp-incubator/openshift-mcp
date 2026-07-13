@@ -1,0 +1,37 @@
+replicaCount: 2
+
+image:
+  repository: registry.snapp.tech/snappcloud/openshift-mcp
+  tag: latest
+  pullPolicy: IfNotPresent
+
+nameOverride: openshift-mcp
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 256Mi
+  limits:
+    cpu: 1
+    memory: 2Gi
+
+service:
+  port: 8080
+
+# Extra env for the container (e.g. K8S_QPS/K8S_BURST/K8S_TIMEOUT).
+# GOMEMLIMIT keeps the Go GC under the container memory limit (90% of limits.memory).
+env:
+  GOMEMLIMIT: "460MiB"
+
+# Extra READ-ONLY ClusterRole rules, e.g. to expose more CRDs through
+# get_resource/list_resource. Only get/list verbs belong here.
+extraRules: []
+#  - apiGroups: ["cilium.io"]
+#    resources: ["ciliumnetworkpolicies"]
+#    verbs: ["get", "list"]
+
+networkPolicy:
+  # Restrict ingress to the router namespace so only the trusted ingress
+  # (and through it, the bot) can reach the server.
+  enabled: true
+  ingressNamespace: snappcloud-ingress
