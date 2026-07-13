@@ -14,8 +14,8 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"gitlab.snapp.ir/snappcloud/openshift-mcp/internal/k8s"
-	"gitlab.snapp.ir/snappcloud/openshift-mcp/internal/version"
+	"github.com/snapp-incubator/openshift-mcp/internal/k8s"
+	"github.com/snapp-incubator/openshift-mcp/internal/version"
 )
 
 // args is a decoded tool-call argument map with typed getters.

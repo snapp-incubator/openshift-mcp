@@ -1,4 +1,4 @@
-module gitlab.snapp.ir/snappcloud/openshift-mcp
+module github.com/snapp-incubator/openshift-mcp
 
 go 1.24.0
 

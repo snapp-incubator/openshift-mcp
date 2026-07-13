@@ -14,7 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"gitlab.snapp.ir/snappcloud/openshift-mcp/internal/k8s"
+	"github.com/snapp-incubator/openshift-mcp/internal/k8s"
 )
 
 const defaultListLimit = 100

@@ -1,25 +1,38 @@
-ARG GOPROXY=https://repo.snapp.tech/repository/goproxy/,direct
+# syntax=docker/dockerfile:1.10
 
-FROM registry.snapp.tech/docker/golang:1.25-alpine AS build
-
-ARG VERSION=dev
-ARG GOPROXY
-ENV GOPROXY=${GOPROXY}
+FROM --platform=$BUILDPLATFORM golang:1.24-bookworm AS builder
 
 WORKDIR /src
+
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod download
+
 COPY . .
-RUN CGO_ENABLED=0 GOFLAGS=-trimpath go build \
-    -ldflags="-X gitlab.snapp.ir/snappcloud/openshift-mcp/internal/version.Version=${VERSION}" \
-    -o /bin/openshift-mcp ./cmd/openshift-mcp
 
-FROM alpine:3.23
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+ARG VERSION=dev
+ARG COMMIT=none
+ARG DATE=unknown
 
-RUN adduser -D -u 10001 appuser
-COPY --from=build /bin/openshift-mcp /openshift-mcp
-USER 10001
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w \
+    -X github.com/snapp-incubator/openshift-mcp/internal/version.Version=${VERSION} \
+    -X github.com/snapp-incubator/openshift-mcp/internal/version.Commit=${COMMIT} \
+    -X github.com/snapp-incubator/openshift-mcp/internal/version.Date=${DATE}" \
+    -o /out/app ./cmd/openshift-mcp
+
+FROM gcr.io/distroless/static-debian12:nonroot
+
+COPY --from=builder /out/app /usr/local/bin/app
+
+USER nonroot:nonroot
 
 EXPOSE 8080
 
-ENTRYPOINT ["/openshift-mcp"]
+ENTRYPOINT ["/usr/local/bin/app"]
+CMD ["-http-addr=:8080"]

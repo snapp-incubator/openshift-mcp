@@ -12,7 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"gitlab.snapp.ir/snappcloud/openshift-mcp/internal/k8s"
+	"github.com/snapp-incubator/openshift-mcp/internal/k8s"
 )
 
 func testPod() *corev1.Pod {

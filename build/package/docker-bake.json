@@ -1,0 +1,18 @@
+{
+  "group": { "default": { "targets": ["openshift-mcp"] } },
+  "variable": { "TAG": { "default": "latest" }, "SHA": { "default": "dev" } },
+  "target": {
+    "openshift-mcp": {
+      "dockerfile": "Dockerfile",
+      "context": ".",
+      "platforms": ["linux/amd64", "linux/arm64"],
+      "args": { "VERSION": "${TAG}", "COMMIT": "${SHA}" },
+      "tags": [
+        "ghcr.io/snapp-incubator/openshift-mcp:${TAG}",
+        "ghcr.io/snapp-incubator/openshift-mcp:sha-${SHA}"
+      ],
+      "cache-from": ["type=gha,scope=openshift-mcp"],
+      "cache-to": ["type=gha,mode=max,scope=openshift-mcp"]
+    }
+  }
+}

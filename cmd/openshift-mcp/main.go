@@ -17,9 +17,9 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"gitlab.snapp.ir/snappcloud/openshift-mcp/internal/k8s"
-	"gitlab.snapp.ir/snappcloud/openshift-mcp/internal/mcp"
-	"gitlab.snapp.ir/snappcloud/openshift-mcp/internal/version"
+	"github.com/snapp-incubator/openshift-mcp/internal/k8s"
+	"github.com/snapp-incubator/openshift-mcp/internal/mcp"
+	"github.com/snapp-incubator/openshift-mcp/internal/version"
 )
 
 func main() {
