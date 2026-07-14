@@ -5,11 +5,13 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -39,6 +41,23 @@ func (a args) intOr(key string, def int) int {
 		return v
 	}
 	return def
+}
+
+func (a args) strSlice(key string) []string {
+	raw, ok := a[key].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // handlerFunc is a tool handler. It returns any JSON-marshalable value (or a
@@ -97,11 +116,11 @@ func (s *Server) addTool(t tool) {
 
 			text, ok := out.(string)
 			if !ok {
-				b, merr := json.MarshalIndent(out, "", "  ")
+				rendered, merr := renderJSON(out)
 				if merr != nil {
 					return errResult("marshal result: %v", merr), nil
 				}
-				text = string(b)
+				text = rendered
 			}
 			s.log.Info("tool result", "tool", t.name, "duration", duration, "bytes", len(text))
 			return textResult(text), nil
@@ -123,6 +142,17 @@ func (s *Server) HTTPHandler() http.Handler {
 	)
 }
 
+func renderJSON(v any) (string, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return "", err
+	}
+	return strings.TrimRight(buf.String(), "\n"), nil
+}
+
 func textResult(text string) *sdkmcp.CallToolResult {
 	return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: text}}}
 }
@@ -138,23 +168,49 @@ const instructions = `You are a Kubernetes/OpenShift observability assistant. Al
 read-only: you inspect cluster state, explain what is wrong, and recommend fixes
 for the user to apply — you never change anything.
 
+Start here:
+- Open-ended "what is wrong with namespace X": diagnose_namespace. It sweeps pods,
+  workloads, endpoints, quota, and PVCs and returns only the problems, ranked, each
+  naming the tool to call next. Follow those next_step hints rather than re-listing.
+
 Investigation workflows:
-1. Unhealthy app: list_pods (check phase/ready/restarts/reason) -> get_pod (container
+1. Unhealthy app: list_pods (phase/ready/restarts/reason) -> get_pod (container
    states, conditions, recent events) -> pod_logs (previous=true after crashes).
-2. Rollout stuck: get_workload (conditions, ready vs desired) -> list_events
+2. Container will not start:
+   - CreateContainerConfigError -> list_config: a referenced ConfigMap/Secret or
+     key is missing (it lists key names, never secret values).
+   - ImagePullBackOff -> check the tag and pull secret; on OpenShift also
+     list_builds (a failed build means the image was never produced) and
+     list_imagestreams (a tag resolving to no image).
+3. Rollout stuck: get_workload (conditions, ready vs desired) -> list_events
    (warnings) -> get_quota (quota exhaustion blocks new pods).
-3. Service unreachable: get_service (selector + endpoint readiness; 0 ready
+4. Service unreachable: get_service (selector + endpoint readiness; 0 ready
    endpoints = selector mismatch or pods not ready) -> list_pods with the selector.
-4. Route/ingress (OpenShift): list_routes (host, target service, admitted status).
-5. Pending pods: get_pod events (FailedScheduling reason), list_nodes/get_node
-   (pressure conditions, allocatable), get_quota.
-6. Resource hunger: top_pods (live CPU/memory) vs container requests/limits in get_pod.
-7. Anything else (CRDs, OpenShift objects): get_resource / list_resource with the
-   exact group/version/resource plural.
+5. Pod-to-pod connectivity fails but endpoints are ready: list_network_policies.
+   A pod selected by any policy is default-deny for that policy's types.
+6. Route/ingress: list_routes on OpenShift; list_ingresses for Kubernetes Ingress.
+7. Pending pods: get_pod events (FailedScheduling), list_nodes/get_node (pressure,
+   allocatable), get_quota. If a PVC is Pending, list_pvcs also returns the cluster's
+   StorageClasses — a missing or ambiguous default class blocks binding forever.
+8. Scaling surprises: list_hpas (an HPA overrides manual replica changes; conditions
+   explain a broken metrics source or a min/max pin).
+9. Drain or upgrade hangs: list_pdbs (disruptions_allowed=0 blocks eviction).
+10. Jobs, CronJobs, and OpenShift DeploymentConfigs: list_workloads covers them all.
+    A suspended CronJob never runs; a failed Job usually means BackoffLimitExceeded.
+11. 403/Forbidden from the API: list_rbac (ServiceAccounts, Roles, RoleBindings).
+12. Resource hunger: top_pods, or list_nodes include_usage=true for node saturation,
+    compared against requests/limits in get_pod.
+13. Many namespaces broken at once: list_cluster_operators (unhealthy_only=true),
+    get_cluster_version, list_machines. Suspect the cluster before the workload.
+14. Anything else (CRDs, other OpenShift objects such as OLM ClusterServiceVersions):
+    api_resources to find the exact group/version/resource, then get_resource /
+    list_resource. Do not guess those strings.
 
 Tips:
 - Always pass namespace where the tool accepts it.
 - pod_logs previous=true shows logs from before the last crash — essential for
   CrashLoopBackOff.
 - Events expire quickly (~1h); absence of events does not mean absence of problems.
-- Summaries omit unchanged/healthy detail; drill into a single object for depth.`
+- Summaries omit unchanged/healthy detail; drill into a single object for depth.
+- A tool reporting a skipped check or a warning is telling you it could not see
+  something (usually RBAC). That is not a clean bill of health — say so.`

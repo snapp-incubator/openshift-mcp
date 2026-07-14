@@ -167,18 +167,86 @@ func handleListEvents(ctx context.Context, c *k8s.Client, a args) (any, error) {
 	return map[string]any{"namespace": ns, "count": len(out), "events": out}, nil
 }
 
-// --- Workloads ---
+func workloadKinds(a args) map[string]bool {
+	requested := a.strSlice("kinds")
+	if requested == nil {
+		return map[string]bool{
+			"deployment": true, "statefulset": true, "daemonset": true,
+			"job": true, "cronjob": true, "deploymentconfig": true,
+		}
+	}
+	out := map[string]bool{}
+	for _, k := range requested {
+		out[strings.ToLower(strings.TrimSuffix(k, "s"))] = true
+	}
+	return out
+}
 
 func handleListWorkloads(ctx context.Context, c *k8s.Client, a args) (any, error) {
 	ns := a.str("namespace")
+	kinds := workloadKinds(a)
 	var out []map[string]any
+	var warnings []string
 
-	deps, err := c.Clientset.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("list deployments in %s: %w", ns, err)
+	if kinds["deployment"] {
+		got, err := deploymentSummaries(ctx, c, ns)
+		if err != nil {
+			return nil, fmt.Errorf("list deployments in %s: %w", ns, err)
+		}
+		out = append(out, got...)
 	}
-	for i := range deps.Items {
-		d := &deps.Items[i]
+	if kinds["statefulset"] {
+		got, err := statefulSetSummaries(ctx, c, ns)
+		if err != nil {
+			return nil, fmt.Errorf("list statefulsets in %s: %w", ns, err)
+		}
+		out = append(out, got...)
+	}
+	if kinds["daemonset"] {
+		got, err := daemonSetSummaries(ctx, c, ns)
+		if err != nil {
+			return nil, fmt.Errorf("list daemonsets in %s: %w", ns, err)
+		}
+		out = append(out, got...)
+	}
+
+	if kinds["job"] {
+		got, err := jobSummaries(ctx, c, ns)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("jobs not listed: %v", err))
+		}
+		out = append(out, got...)
+	}
+	if kinds["cronjob"] {
+		got, err := cronJobSummaries(ctx, c, ns)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("cronjobs not listed: %v", err))
+		}
+		out = append(out, got...)
+	}
+	if kinds["deploymentconfig"] {
+		got, err := deploymentConfigSummaries(ctx, c, ns)
+		if err != nil && a.strSlice("kinds") != nil {
+			warnings = append(warnings, fmt.Sprintf("deploymentconfigs not listed: %v", err))
+		}
+		out = append(out, got...)
+	}
+
+	res := map[string]any{"namespace": ns, "count": len(out), "workloads": out}
+	if len(warnings) > 0 {
+		res["warnings"] = warnings
+	}
+	return res, nil
+}
+
+func deploymentSummaries(ctx context.Context, c *k8s.Client, ns string) ([]map[string]any, error) {
+	list, err := c.Clientset.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]any, 0, len(list.Items))
+	for i := range list.Items {
+		d := &list.Items[i]
 		desired := int32(1)
 		if d.Spec.Replicas != nil {
 			desired = *d.Spec.Replicas
@@ -195,13 +263,17 @@ func handleListWorkloads(ctx context.Context, c *k8s.Client, a args) (any, error
 		}
 		out = append(out, entry)
 	}
+	return out, nil
+}
 
-	stss, err := c.Clientset.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
+func statefulSetSummaries(ctx context.Context, c *k8s.Client, ns string) ([]map[string]any, error) {
+	list, err := c.Clientset.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("list statefulsets in %s: %w", ns, err)
+		return nil, err
 	}
-	for i := range stss.Items {
-		s := &stss.Items[i]
+	out := make([]map[string]any, 0, len(list.Items))
+	for i := range list.Items {
+		s := &list.Items[i]
 		desired := int32(1)
 		if s.Spec.Replicas != nil {
 			desired = *s.Spec.Replicas
@@ -212,20 +284,24 @@ func handleListWorkloads(ctx context.Context, c *k8s.Client, a args) (any, error
 			"age":   age(s.CreationTimestamp.Time),
 		})
 	}
+	return out, nil
+}
 
-	dss, err := c.Clientset.AppsV1().DaemonSets(ns).List(ctx, metav1.ListOptions{})
+func daemonSetSummaries(ctx context.Context, c *k8s.Client, ns string) ([]map[string]any, error) {
+	list, err := c.Clientset.AppsV1().DaemonSets(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("list daemonsets in %s: %w", ns, err)
+		return nil, err
 	}
-	for i := range dss.Items {
-		d := &dss.Items[i]
+	out := make([]map[string]any, 0, len(list.Items))
+	for i := range list.Items {
+		d := &list.Items[i]
 		out = append(out, map[string]any{
 			"kind": "DaemonSet", "name": d.Name, "namespace": ns,
 			"ready": fmt.Sprintf("%d/%d", d.Status.NumberReady, d.Status.DesiredNumberScheduled),
 			"age":   age(d.CreationTimestamp.Time),
 		})
 	}
-	return map[string]any{"namespace": ns, "count": len(out), "workloads": out}, nil
+	return out, nil
 }
 
 func handleGetWorkload(ctx context.Context, c *k8s.Client, a args) (any, error) {
@@ -293,8 +369,23 @@ func handleGetWorkload(ctx context.Context, c *k8s.Client, a args) (any, error) 
 				"reason": cond.Reason, "message": cond.Message,
 			})
 		}
+	case "job":
+		var err error
+		if selector, status, conditions, err = jobDetail(ctx, c, ns, name); err != nil {
+			return nil, err
+		}
+	case "cronjob":
+		var err error
+		if selector, status, conditions, err = cronJobDetail(ctx, c, ns, name); err != nil {
+			return nil, err
+		}
+	case "replicaset":
+		var err error
+		if selector, status, conditions, err = replicaSetDetail(ctx, c, ns, name); err != nil {
+			return nil, err
+		}
 	default:
-		return nil, fmt.Errorf("unknown kind %q (use deployment, statefulset, or daemonset)", kind)
+		return nil, fmt.Errorf("unknown kind %q (use deployment, statefulset, daemonset, job, cronjob, or replicaset)", kind)
 	}
 
 	// The workload's pods, via its selector.
@@ -419,7 +510,30 @@ func handleListPVCs(ctx context.Context, c *k8s.Client, a args) (any, error) {
 			"age": age(pvc.CreationTimestamp.Time),
 		})
 	}
-	return map[string]any{"namespace": ns, "count": len(out), "pvcs": out}, nil
+
+	res := map[string]any{"namespace": ns, "count": len(out), "pvcs": out}
+
+	if anyPVCUnbound(&list.Items) {
+		if classes, cerr := storageClassSummaries(ctx, c); cerr == nil {
+			res["storage_classes"] = classes.entries
+			if classes.warning != "" {
+				res["storage_warning"] = classes.warning
+			}
+			if classes.defaultClass != "" {
+				res["default_storage_class"] = classes.defaultClass
+			}
+		}
+	}
+	return res, nil
+}
+
+func anyPVCUnbound(pvcs *[]corev1.PersistentVolumeClaim) bool {
+	for i := range *pvcs {
+		if (*pvcs)[i].Status.Phase != corev1.ClaimBound {
+			return true
+		}
+	}
+	return false
 }
 
 func handleGetQuota(ctx context.Context, c *k8s.Client, a args) (any, error) {
@@ -504,11 +618,18 @@ func handleTopPods(ctx context.Context, c *k8s.Client, a args) (any, error) {
 
 // --- Nodes ---
 
-func handleListNodes(ctx context.Context, c *k8s.Client, _ args) (any, error) {
+func handleListNodes(ctx context.Context, c *k8s.Client, a args) (any, error) {
 	list, err := c.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("list nodes: %w", err)
 	}
+
+	var usage map[string]nodeUsage
+	var usageErr error
+	if a.boolean("include_usage") {
+		usage, usageErr = nodeUsageByName(ctx, c)
+	}
+
 	out := make([]map[string]any, 0, len(list.Items))
 	for i := range list.Items {
 		node := &list.Items[i]
@@ -521,7 +642,7 @@ func handleListNodes(ctx context.Context, c *k8s.Client, _ args) (any, error) {
 				pressures = append(pressures, string(cond.Type))
 			}
 		}
-		out = append(out, map[string]any{
+		entry := map[string]any{
 			"name": node.Name, "ready": ready, "roles": nodeRoles(node),
 			"kubelet":  node.Status.NodeInfo.KubeletVersion,
 			"cpu":      node.Status.Allocatable.Cpu().String(),
@@ -529,9 +650,18 @@ func handleListNodes(ctx context.Context, c *k8s.Client, _ args) (any, error) {
 			"taints":   len(node.Spec.Taints),
 			"pressure": pressures,
 			"age":      age(node.CreationTimestamp.Time),
-		})
+		}
+		if u, ok := usage[node.Name]; ok {
+			entry["usage"] = u.render(node.Status.Allocatable)
+		}
+		out = append(out, entry)
 	}
-	return map[string]any{"count": len(out), "nodes": out}, nil
+
+	res := map[string]any{"count": len(out), "nodes": out}
+	if usageErr != nil {
+		res["usage_warning"] = fmt.Sprintf("live usage unavailable: %v", usageErr)
+	}
+	return res, nil
 }
 
 func handleGetNode(ctx context.Context, c *k8s.Client, a args) (any, error) {
