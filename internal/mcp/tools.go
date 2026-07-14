@@ -1,6 +1,5 @@
 package mcp
 
-// Schema helpers: JSON-Schema fragments for tool inputs.
 
 func objSchema(props map[string]any, required ...string) map[string]any {
 	s := map[string]any{"type": "object", "properties": props}
@@ -28,6 +27,14 @@ func boolean(desc string) map[string]any {
 
 func integer(desc string) map[string]any {
 	return map[string]any{"type": "integer", "description": desc}
+}
+
+func strArray(desc string) map[string]any {
+	return map[string]any{
+		"type":        "array",
+		"description": desc,
+		"items":       map[string]any{"type": "string"},
+	}
 }
 
 const nsDesc = "Kubernetes namespace."
@@ -78,19 +85,22 @@ func buildTools() []tool {
 		},
 		{
 			name:        "list_workloads",
-			description: "Deployments, StatefulSets, and DaemonSets in a namespace with ready/desired replica counts. Quickly shows which workload is degraded.",
+			description: "Deployments, StatefulSets, DaemonSets, Jobs, and CronJobs in a namespace with ready/desired counts and a reason when degraded. Quickly shows which workload is broken.",
 			schema: objSchema(map[string]any{
 				"namespace": str(nsDesc),
+				"kinds": strArray("Optional kinds to include: deployment, statefulset, daemonset, job, cronjob, " +
+					"deploymentconfig (OpenShift). Defaults to all of them."),
 			}, "namespace"),
 			handler: handleListWorkloads,
 		},
 		{
 			name:        "get_workload",
-			description: "One workload's rollout state: replica counts, conditions (with messages), selector, and its pods' health.",
+			description: "One workload's rollout state: replica or completion counts, conditions (with messages), selector, and its pods' health.",
 			schema: objSchema(map[string]any{
 				"namespace": str(nsDesc),
-				"kind":      strEnum("Workload kind.", "deployment", "statefulset", "daemonset"),
-				"name":      str("Workload name."),
+				"kind": strEnum("Workload kind.",
+					"deployment", "statefulset", "daemonset", "job", "cronjob", "replicaset"),
+				"name": str("Workload name."),
 			}, "namespace", "kind", "name"),
 			handler: handleGetWorkload,
 		},
@@ -121,7 +131,7 @@ func buildTools() []tool {
 		},
 		{
 			name:        "list_pvcs",
-			description: "PersistentVolumeClaims in a namespace: phase (Pending = unbound), capacity, storage class, bound volume.",
+			description: "PersistentVolumeClaims in a namespace: phase (Pending = unbound), capacity, storage class, bound volume. When any PVC is unbound it also returns the cluster's StorageClasses and flags a missing or ambiguous default class.",
 			schema: objSchema(map[string]any{
 				"namespace": str(nsDesc),
 			}, "namespace"),
@@ -145,9 +155,11 @@ func buildTools() []tool {
 		},
 		{
 			name:        "list_nodes",
-			description: "Cluster nodes: readiness, roles, kubelet version, allocatable CPU/memory, taints, and any pressure conditions.",
-			schema:      objSchema(map[string]any{}),
-			handler:     handleListNodes,
+			description: "Cluster nodes: readiness, roles, kubelet version, allocatable CPU/memory, taints, and any pressure conditions. Set include_usage=true to add live CPU/memory per node as a percentage of allocatable (which nodes are saturated).",
+			schema: objSchema(map[string]any{
+				"include_usage": boolean("Include live CPU/memory usage per node from metrics.k8s.io, as a percentage of allocatable."),
+			}),
+			handler: handleListNodes,
 		},
 		{
 			name:        "get_node",
@@ -158,8 +170,122 @@ func buildTools() []tool {
 			handler: handleGetNode,
 		},
 		{
+			name:        "diagnose_namespace",
+			description: "One-shot health sweep of a namespace: checks pods, workloads, service endpoints, quota, and PVCs, and returns only the problems, ranked worst-first, each with the tool to call next. Start here when asked an open-ended 'what is wrong with X'.",
+			schema: objSchema(map[string]any{
+				"namespace": str(nsDesc),
+			}, "namespace"),
+			handler: handleDiagnoseNamespace,
+		},
+		{
+			name:        "list_config",
+			description: "ConfigMaps and Secrets in a namespace with their key names — the thing to check for CreateContainerConfigError, where a pod references a missing object or key. Secret values are never exposed; ConfigMap values are available via get_resource.",
+			schema: objSchema(map[string]any{
+				"namespace": str(nsDesc),
+				"selector":  str("Optional label selector."),
+			}, "namespace"),
+			handler: handleListConfig,
+		},
+		{
+			name:        "list_network_policies",
+			description: "NetworkPolicies in a namespace, with each policy's target pods and its ingress/egress rules in readable form. The first thing to check when one pod cannot reach another.",
+			schema: objSchema(map[string]any{
+				"namespace": str(nsDesc),
+			}, "namespace"),
+			handler: handleListNetworkPolicies,
+		},
+		{
+			name:        "list_ingresses",
+			description: "Kubernetes Ingresses in a namespace: host/path rules, backend services, TLS hosts, and assigned addresses. No address means no controller claimed it. On OpenShift, list_routes is usually the relevant tool instead.",
+			schema: objSchema(map[string]any{
+				"namespace": str(nsDesc),
+			}, "namespace"),
+			handler: handleListIngresses,
+		},
+		{
+			name:        "list_rbac",
+			description: "ServiceAccounts, Roles, and RoleBindings in a namespace — who is granted what. Use when a pod gets 403/Forbidden from the Kubernetes API.",
+			schema: objSchema(map[string]any{
+				"namespace": str(nsDesc),
+			}, "namespace"),
+			handler: handleListRBAC,
+		},
+		{
+			name:        "list_machines",
+			description: "OpenShift Machines (the layer beneath nodes) with phase and their backing node. Explains a node that never joined or disappeared, which list_nodes cannot show.",
+			schema: objSchema(map[string]any{
+				"unhealthy_only": boolean("Return only machines that are not Running."),
+			}),
+			handler: handleListMachines,
+		},
+		{
+			name:        "list_hpas",
+			description: "HorizontalPodAutoscalers in a namespace: min/max, current vs desired replicas, metric targets vs current values, and conditions explaining why scaling is blocked or limited.",
+			schema: objSchema(map[string]any{
+				"namespace": str(nsDesc),
+			}, "namespace"),
+			handler: handleListHPAs,
+		},
+		{
+			name:        "list_pdbs",
+			description: "PodDisruptionBudgets in a namespace with allowed disruptions and healthy/desired counts. disruptions_allowed=0 is why a node drain or upgrade hangs.",
+			schema: objSchema(map[string]any{
+				"namespace": str(nsDesc),
+			}, "namespace"),
+			handler: handleListPDBs,
+		},
+		{
+			name:        "list_namespaces",
+			description: "Namespaces visible to this server, with phase and age. Use to discover what exists before drilling in.",
+			schema: objSchema(map[string]any{
+				"filter":   str("Optional case-insensitive substring match on the namespace name."),
+				"selector": str("Optional label selector."),
+			}),
+			handler: handleListNamespaces,
+		},
+		{
+			name:        "api_resources",
+			description: "Discover which API resources this cluster serves, with the exact group/version/resource plural that get_resource and list_resource need. Call this before guessing those values for a CRD or OpenShift kind.",
+			schema: objSchema(map[string]any{
+				"filter": str("Optional case-insensitive substring match on resource name, kind, or group (e.g. 'route', 'cilium')."),
+				"group":  str("Optional exact API group filter (e.g. 'route.openshift.io')."),
+			}),
+			handler: handleAPIResources,
+		},
+		{
+			name:        "list_cluster_operators",
+			description: "OpenShift ClusterOperators with Available/Degraded/Progressing and the message from any failing condition. When many namespaces break at once, check here before blaming a workload.",
+			schema: objSchema(map[string]any{
+				"unhealthy_only": boolean("Return only operators that are Degraded or not Available."),
+			}),
+			handler: handleListClusterOperators,
+		},
+		{
+			name:        "get_cluster_version",
+			description: "OpenShift cluster version, channel, upgrade progress, available updates, and recent upgrade history.",
+			schema:      objSchema(map[string]any{}),
+			handler:     handleGetClusterVersion,
+		},
+		{
+			name:        "list_builds",
+			description: "OpenShift Builds in a namespace with phase, reason, and failure message. A failed build explains why the image a workload wants was never produced.",
+			schema: objSchema(map[string]any{
+				"namespace": str(nsDesc),
+				"selector":  str("Optional label selector (e.g. 'buildconfig=my-app')."),
+			}, "namespace"),
+			handler: handleListBuilds,
+		},
+		{
+			name:        "list_imagestreams",
+			description: "OpenShift ImageStreams in a namespace with their tags, flagging tags that resolve to no image — a common cause of pods that never pull.",
+			schema: objSchema(map[string]any{
+				"namespace": str(nsDesc),
+			}, "namespace"),
+			handler: handleListImageStreams,
+		},
+		{
 			name:        "get_resource",
-			description: "Read any single API object (including CRDs and OpenShift kinds) by group/version/resource plural. Read-only escape hatch, e.g. group='route.openshift.io', version='v1', resource='routes'.",
+			description: "Read any single API object (including CRDs and OpenShift kinds) by group/version/resource plural. Read-only escape hatch, e.g. group='route.openshift.io', version='v1', resource='routes'. Use api_resources to find the exact values.",
 			schema: objSchema(map[string]any{
 				"group":     str("API group ('' for core, e.g. 'apps', 'route.openshift.io')."),
 				"version":   str("API version (e.g. 'v1')."),
