@@ -23,6 +23,7 @@ cluster state.
 | `get_workload` | Rollout state, conditions, and the workload's pods |
 | `list_services` / `get_service` | Services + endpoint readiness (selector mismatches) |
 | `list_routes` | OpenShift Routes: host, target, TLS, admitted |
+| `list_certificates` | Cert expiry from TLS secrets: subject/issuer/SANs/notAfter/days_left (public cert only, never keys). Needs secret-read Role in the namespace |
 | `list_pvcs` | PVC phase/capacity/class |
 | `get_quota` | ResourceQuota usage + LimitRanges |
 | `top_pods` | Live CPU/memory per pod (metrics.k8s.io) |

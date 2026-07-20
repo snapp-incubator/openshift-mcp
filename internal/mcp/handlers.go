@@ -2,6 +2,8 @@ package mcp
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"sort"
 	"strings"
@@ -608,6 +610,7 @@ func handleListResource(ctx context.Context, c *k8s.Client, a args) (any, error)
 	for i := range list.Items {
 		item := &list.Items[i]
 		out = append(out, map[string]any{
+			"kind":      item.GetKind(),
 			"name":      item.GetName(),
 			"namespace": item.GetNamespace(),
 			"age":       age(item.GetCreationTimestamp().Time),
@@ -778,5 +781,68 @@ func age(t time.Time) string {
 		return fmt.Sprintf("%dm", int(d.Minutes()))
 	default:
 		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+}
+
+// --- Certificates ---
+
+// handleListCertificates reports certificate expiry for a namespace by parsing
+// the PUBLIC certificate material (tls.crt / ca.crt) of its secrets. Private
+// keys are never read or returned. Secret read access is granted only for
+// explicitly configured platform namespaces.
+func handleListCertificates(ctx context.Context, c *k8s.Client, a args) (any, error) {
+	ns := a.str("namespace")
+	list, err := c.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list secrets in %s (certificate read access may not be granted for this namespace): %w", ns, err)
+	}
+
+	var out []map[string]any
+	for i := range list.Items {
+		sec := &list.Items[i]
+		for _, key := range []string{"tls.crt", "ca.crt"} {
+			data, ok := sec.Data[key]
+			if !ok || len(data) == 0 {
+				continue
+			}
+			cert, perr := leafCertificate(data)
+			if perr != nil {
+				continue
+			}
+			entry := map[string]any{
+				"secret":     sec.Name,
+				"source":     key,
+				"subject":    cert.Subject.CommonName,
+				"issuer":     cert.Issuer.CommonName,
+				"not_before": cert.NotBefore.Format(time.RFC3339),
+				"not_after":  cert.NotAfter.Format(time.RFC3339),
+				"days_left":  int(time.Until(cert.NotAfter).Hours() / 24),
+				"expired":    time.Now().After(cert.NotAfter),
+			}
+			if len(cert.DNSNames) > 0 {
+				sans := cert.DNSNames
+				if len(sans) > 8 {
+					sans = append(append([]string{}, sans[:8]...), fmt.Sprintf("(+%d more)", len(cert.DNSNames)-8))
+				}
+				entry["sans"] = sans
+			}
+			out = append(out, entry)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i]["days_left"].(int) < out[j]["days_left"].(int) })
+	return map[string]any{"namespace": ns, "count": len(out), "certificates": out}, nil
+}
+
+// leafCertificate parses the first certificate in a PEM bundle.
+func leafCertificate(pemData []byte) (*x509.Certificate, error) {
+	for {
+		block, rest := pem.Decode(pemData)
+		if block == nil {
+			return nil, fmt.Errorf("no certificate in PEM data")
+		}
+		if block.Type == "CERTIFICATE" {
+			return x509.ParseCertificate(block.Bytes)
+		}
+		pemData = rest
 	}
 }

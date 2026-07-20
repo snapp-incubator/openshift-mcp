@@ -158,6 +158,14 @@ func buildTools() []tool {
 			handler: handleGetNode,
 		},
 		{
+			name:        "list_certificates",
+			description: "Certificate expiry report for a namespace: parses the PUBLIC certificate data (tls.crt/ca.crt) of TLS secrets and returns subject, issuer, SANs, notBefore/notAfter, and days until expiry. Never returns private keys. Requires read access to secrets in that namespace (granted only for platform namespaces, e.g. openshift-ingress, openshift-config).",
+			schema: objSchema(map[string]any{
+				"namespace": str(nsDesc),
+			}, "namespace"),
+			handler: handleListCertificates,
+		},
+		{
 			name:        "get_resource",
 			description: "Read any single API object (including CRDs and OpenShift kinds) by group/version/resource plural. Read-only escape hatch, e.g. group='route.openshift.io', version='v1', resource='routes'.",
 			schema: objSchema(map[string]any{
