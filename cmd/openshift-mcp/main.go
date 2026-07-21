@@ -15,8 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"github.com/snapp-incubator/openshift-mcp/internal/k8s"
 	"github.com/snapp-incubator/openshift-mcp/internal/mcp"
 	"github.com/snapp-incubator/openshift-mcp/internal/version"
@@ -56,11 +54,21 @@ func runHTTP(ctx context.Context, srv *mcp.Server, client *k8s.Client, log *slog
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	// readinessTimeout bounds the API-server reachability probe. Kept generous
+	// (and configurable) so a transiently slow API or a client-go rate-limiter
+	// wait does not flap the pod out of Service endpoints.
+	readinessTimeout := 10 * time.Second
+	if v := os.Getenv("READINESS_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			readinessTimeout = d
+		}
+	}
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		checkCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		checkCtx, cancel := context.WithTimeout(r.Context(), readinessTimeout)
 		defer cancel()
-		// Cheap API-server reachability probe.
-		if _, err := client.Clientset.CoreV1().Namespaces().List(checkCtx, metav1.ListOptions{Limit: 1}); err != nil {
+		// Lightweight API-server reachability probe: a single GET /version,
+		// no object listing and no RBAC — just "is the API answering".
+		if _, err := client.Clientset.Discovery().RESTClient().Get().AbsPath("/version").DoRaw(checkCtx); err != nil {
 			log.Warn("readiness check failed", "err", err)
 			http.Error(w, "kubernetes api unavailable", http.StatusServiceUnavailable)
 			return
