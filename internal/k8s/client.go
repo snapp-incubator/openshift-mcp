@@ -71,10 +71,19 @@ func New(cfg *Config) (*Client, error) {
 	restCfg.QPS = cfg.QPS
 	restCfg.Burst = cfg.Burst
 
-	cs, err := kubernetes.NewForConfig(restCfg)
+	// Typed client negotiates protobuf: built-in API objects encode far smaller
+	// and faster than JSON (this is what kubectl uses), cutting latency and
+	// memory on large list calls. Falls back to JSON when a resource has no
+	// protobuf codec.
+	typedCfg := rest.CopyConfig(restCfg)
+	typedCfg.AcceptContentTypes = "application/vnd.kubernetes.protobuf,application/json"
+	typedCfg.ContentType = "application/vnd.kubernetes.protobuf"
+	cs, err := kubernetes.NewForConfig(typedCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create kubernetes client: %w", err)
 	}
+	// Dynamic client (CRDs: routes, metrics, etc.) stays JSON — protobuf is not
+	// available for arbitrary resources.
 	dyn, err := dynamic.NewForConfig(restCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create dynamic client: %w", err)

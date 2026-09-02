@@ -594,7 +594,17 @@ func handleListResource(ctx context.Context, c *k8s.Client, a args) (any, error)
 	gvr := schema.GroupVersionResource{
 		Group: a.str("group"), Version: a.str("version"), Resource: a.str("resource"),
 	}
-	opts := metav1.ListOptions{LabelSelector: a.str("selector"), Limit: 50}
+	// Filter and cap SERVER-side: fetching a whole resource type and discarding
+	// it client-side is what makes generic queries slow on large clusters.
+	limit := a.intOr("limit", defaultListLimit)
+	if limit < 1 || limit > 200 {
+		limit = defaultListLimit
+	}
+	opts := metav1.ListOptions{
+		LabelSelector: a.str("selector"),
+		FieldSelector: a.str("field_selector"),
+		Limit:         int64(limit),
+	}
 	ns := a.str("namespace")
 	var list *unstructured.UnstructuredList
 	var err error
@@ -616,7 +626,13 @@ func handleListResource(ctx context.Context, c *k8s.Client, a args) (any, error)
 			"age":       age(item.GetCreationTimestamp().Time),
 		})
 	}
-	return map[string]any{"resource": gvr.String(), "count": len(out), "items": out}, nil
+	res := map[string]any{"resource": gvr.String(), "count": len(out), "items": out}
+	// Tell the model the view is partial so it narrows instead of assuming.
+	if list.GetContinue() != "" {
+		res["truncated"] = true
+		res["hint"] = "more items exist; narrow with namespace, selector or field_selector"
+	}
+	return res, nil
 }
 
 // --- helpers ---

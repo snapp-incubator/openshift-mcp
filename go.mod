@@ -1,9 +1,10 @@
 module github.com/snapp-incubator/openshift-mcp
 
-go 1.24.0
+go 1.25.0
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.4.0
+	golang.org/x/sync v0.22.0
 	k8s.io/api v0.32.0
 	k8s.io/apimachinery v0.32.0
 	k8s.io/client-go v0.32.0

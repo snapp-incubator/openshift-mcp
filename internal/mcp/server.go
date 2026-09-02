@@ -57,12 +57,19 @@ type tool struct {
 type Server struct {
 	mcpServer *sdkmcp.Server
 	client    *k8s.Client
+	cache     *resultCache
 	log       *slog.Logger
 }
 
 // NewServer builds the server and registers all tools.
 func NewServer(client *k8s.Client, log *slog.Logger) *Server {
-	s := &Server{client: client, log: log}
+	s := &Server{
+		client: client,
+		// Short TTL: the agent repeats identical read queries within one
+		// investigation. Bounded LRU keeps memory flat regardless of variety.
+		cache: newResultCache(5*time.Second, 512),
+		log:   log,
+	}
 	s.mcpServer = sdkmcp.NewServer(
 		&sdkmcp.Implementation{Name: "openshift-mcp", Version: version.String()},
 		&sdkmcp.ServerOptions{Instructions: instructions},
@@ -88,20 +95,27 @@ func (s *Server) addTool(t tool) {
 			start := time.Now()
 			s.log.Info("tool call", "tool", t.name, "args", map[string]any(a))
 
-			out, err := handler(ctx, s.client, a)
+			// Cache key: tool name + raw arguments. Identical read queries within
+			// the TTL are served from cache (and concurrent ones collapsed).
+			key := t.name + "\x00" + string(req.Params.Arguments)
+			text, err := s.cache.do(key, func() (string, error) {
+				out, herr := handler(ctx, s.client, a)
+				if herr != nil {
+					return "", herr
+				}
+				if str, ok := out.(string); ok {
+					return str, nil
+				}
+				b, merr := json.MarshalIndent(out, "", "  ")
+				if merr != nil {
+					return "", fmt.Errorf("marshal result: %w", merr)
+				}
+				return string(b), nil
+			})
 			duration := time.Since(start)
 			if err != nil {
 				s.log.Warn("tool error", "tool", t.name, "duration", duration, "err", err)
 				return errResult("%v", err), nil
-			}
-
-			text, ok := out.(string)
-			if !ok {
-				b, merr := json.MarshalIndent(out, "", "  ")
-				if merr != nil {
-					return errResult("marshal result: %v", merr), nil
-				}
-				text = string(b)
 			}
 			s.log.Info("tool result", "tool", t.name, "duration", duration, "bytes", len(text))
 			return textResult(text), nil
@@ -150,7 +164,15 @@ Investigation workflows:
    (pressure conditions, allocatable), get_quota.
 6. Resource hunger: top_pods (live CPU/memory) vs container requests/limits in get_pod.
 7. Anything else (CRDs, OpenShift objects): get_resource / list_resource with the
-   exact group/version/resource plural.
+   exact group/version/resource plural. Available read-only beyond the core kinds:
+   monitoring.coreos.com (servicemonitors, podmonitors, prometheusrules, probes),
+   batch (cronjobs, jobs), autoscaling (horizontalpodautoscalers), policy
+   (poddisruptionbudgets), networking.k8s.io (networkpolicies, ingresses),
+   projectcontour.io (httpproxies), argoproj.io (applications, rollouts),
+   cert-manager.io (certificates), build/image.openshift.io, and the managed
+   data services (postgresql.cnpg.io clusters, kafka.strimzi.io kafkas,
+   rabbitmq.com rabbitmqclusters, redis, elasticsearches, ...). Secrets are NOT
+   accessible and never will be.
 
 Tips:
 - Always pass namespace where the tool accepts it.
