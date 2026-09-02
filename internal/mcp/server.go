@@ -186,6 +186,10 @@ Investigation workflows:
 
 Tips:
 - Always pass namespace where the tool accepts it.
+- get_resource replaces credential-looking VALUES with [redacted] and reports how
+  many. The field is still shown, so report what you see: "DB_PASSWORD is set
+  inline (value hidden)" is useful and correct; do not say the value is empty or
+  unset, and never try to obtain it another way.
 - pod_logs previous=true shows logs from before the last crash — essential for
   CrashLoopBackOff.
 - Events expire quickly (~1h); absence of events does not mean absence of problems.

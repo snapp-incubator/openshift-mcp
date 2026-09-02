@@ -587,6 +587,19 @@ func handleGetResource(ctx context.Context, c *k8s.Client, a args) (any, error) 
 	// Strip the noisiest metadata before returning the object.
 	unstructured.RemoveNestedField(obj.Object, "metadata", "managedFields")
 	unstructured.RemoveNestedField(obj.Object, "metadata", "annotations", "kubectl.kubernetes.io/last-applied-configuration")
+
+	// This is the only handler that returns a raw object, so it is the only
+	// place an inline credential can reach an answer. Values are replaced, the
+	// fields holding them are not: the model still sees that a password is set
+	// inline, which is itself worth reporting.
+	if n := redactObject(obj.Object); n > 0 {
+		return map[string]any{
+			"object":   obj.Object,
+			"redacted": n,
+			"note": "credential-looking values were replaced with [redacted]; " +
+				"the fields are shown so you can say a value is set without revealing it",
+		}, nil
+	}
 	return obj.Object, nil
 }
 

@@ -33,6 +33,29 @@ cluster state.
 Most tools take a required `namespace` — which lets the bot's authorization
 layer enforce the caller's scope on both arguments and results.
 
+### Redaction
+
+`get_resource` is the only tool that returns a raw object, so it is the only
+path an inline credential can take into an answer. Before returning, it replaces
+credential **values** — leaving the fields that hold them in place:
+
+- fields named for a credential (`password`, `token`, `clientSecret`, `apiKey`,
+  `authorization`, …), including `env` entries whose *name* is credential-like;
+- URL userinfo: `https://user:pass@host` → `https://user:[redacted]@host`, so the
+  endpoint stays visible;
+- sensitive command-line flags (`-remoteWrite.basicAuth.password=…`), the form
+  operator `extraArgs` use;
+- an inline Route TLS private key (`spec.tls.key`), recognised by its siblings —
+  the certificate is public and is kept.
+
+References are never redacted: `secretKeyRef`, `secretName` and friends name a
+Secret rather than carrying one, and "which secret does this use" has to stay
+answerable. Detection is name-driven, never entropy-driven — guessing at
+"random-looking" strings would redact image digests, UIDs and resource versions.
+
+The response reports how many values were replaced, so the model can say a
+password is set inline without revealing it.
+
 ## Run
 
 ```bash
