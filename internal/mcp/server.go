@@ -165,14 +165,24 @@ Investigation workflows:
 6. Resource hunger: top_pods (live CPU/memory) vs container requests/limits in get_pod.
 7. Anything else (CRDs, OpenShift objects): get_resource / list_resource with the
    exact group/version/resource plural. Available read-only beyond the core kinds:
-   monitoring.coreos.com (servicemonitors, podmonitors, prometheusrules, probes),
-   batch (cronjobs, jobs), autoscaling (horizontalpodautoscalers), policy
-   (poddisruptionbudgets), networking.k8s.io (networkpolicies, ingresses),
-   projectcontour.io (httpproxies), argoproj.io (applications, rollouts),
-   cert-manager.io (certificates), build/image.openshift.io, and the managed
-   data services (postgresql.cnpg.io clusters, kafka.strimzi.io kafkas,
-   rabbitmq.com rabbitmqclusters, redis, elasticsearches, ...). Secrets are NOT
-   accessible and never will be.
+   batch (cronjobs, jobs), autoscaling (horizontalpodautoscalers),
+   autoscaling.k8s.io (verticalpodautoscalers), policy (poddisruptionbudgets),
+   networking.k8s.io (networkpolicies), projectcontour.io (httpproxies),
+   cilium.io (ciliumnetworkpolicies, ciliumendpoints), monitoring.coreos.com and
+   operator.victoriametrics.com scrape/rule DEFINITIONS (servicemonitors,
+   podmonitors, prometheusrules, probes, vmrules, vmservicescrapes,
+   vmpodscrapes, vmprobes), kyverno.io + wgpolicyk8s.io (policies and
+   policyreports — why a resource was rejected or flagged), argoproj.io
+   (applications, appprojects, rollouts), cert-manager.io (certificates,
+   certificaterequests), quota.openshift.io, s3.snappcloud.io, and the main
+   managed data services (postgresql.cnpg.io, kafka.strimzi.io, rabbitmq.com
+   rabbitmqclusters, databases.spotahome.com redisfailovers,
+   psmdb.percona.com).
+
+   Not reachable, by design: secrets; monitoring operator INSTANCE kinds
+   (Prometheus, Alertmanager, VMAgent, VMAlert — their specs can carry inline
+   credentials); ClusterIssuers; and the long tail of data-service CRDs. If a
+   kind is refused, say so plainly and suggest "oc get" — do not retry it.
 
 Tips:
 - Always pass namespace where the tool accepts it.
