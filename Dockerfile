@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.10
 
-FROM --platform=$BUILDPLATFORM golang:1.24-bookworm AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS builder
 
 WORKDIR /src
 
