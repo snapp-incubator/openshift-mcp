@@ -31,7 +31,7 @@ func (a args) boolean(key string) bool {
 	return v
 }
 
-// strs reads a string-array argument, dropping non-string and empty entries.
+// strs reads a list of strings, skipping empty or non-string values.
 func (a args) strs(key string) []string {
 	raw, _ := a[key].([]any)
 	out := make([]string, 0, len(raw))

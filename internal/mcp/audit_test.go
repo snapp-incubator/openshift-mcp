@@ -30,10 +30,9 @@ var (
 	teamGVR        = schema.GroupVersionResource{Group: "team.snappcloud.io", Version: "v1alpha1", Resource: "teams"}
 )
 
-// newDynamic builds a fake dynamic client that serves every GVR the audit
-// lists. The fake panics on an unregistered list, so all are registered, and
-// objs are added under their explicit GVR (the fake's kind→resource guess
-// turns Redis into "redises").
+// newDynamic builds a fake dynamic client that serves every resource the
+// audit lists (the fake panics on unregistered ones). Objects are added with
+// an explicit resource because the fake would guess "redises" for Redis.
 func newDynamic(t *testing.T, objs map[schema.GroupVersionResource][]*unstructured.Unstructured) *dynamicfake.FakeDynamicClient {
 	t.Helper()
 	listKinds := map[schema.GroupVersionResource]string{teamGVR: "TeamList"}
@@ -53,7 +52,7 @@ func newDynamic(t *testing.T, objs map[schema.GroupVersionResource][]*unstructur
 	return dyn
 }
 
-// notServed makes the fake answer like an API server without the resource.
+// notServed makes the fake act as if the resource is not installed.
 func notServed(dyn *dynamicfake.FakeDynamicClient, resource, version string) {
 	dyn.PrependReactor("list", resource, func(action clienttesting.Action) (bool, runtime.Object, error) {
 		if version != "" && action.GetResource().Version != version {
@@ -168,14 +167,14 @@ func auditFixture(t *testing.T) *k8s.Client {
 		pdb("pay-prod", "api-pdb", app, &one, nil, policyv1.PodDisruptionBudgetStatus{ExpectedPods: 1, CurrentHealthy: 1, DesiredHealthy: 1}),
 		pdb("pay-prod", "api-pdb-2", app, nil, &zero, policyv1.PodDisruptionBudgetStatus{ExpectedPods: 1, CurrentHealthy: 1, DesiredHealthy: 1}),
 
-		// A pending pod in two PDBs: eviction never checks it, so no overlap.
+		// A pending pod in two PDBs: not an overlap, eviction ignores it.
 		pod("pay-prod", "web-0", corev1.PodPending, web, nil),
 		pdb("pay-prod", "web-a", web, &one, nil, policyv1.PodDisruptionBudgetStatus{}),
 		pdb("pay-prod", "web-b", web, &one, nil, policyv1.PodDisruptionBudgetStatus{}),
-		// A finished pod is ignored entirely.
+		// Finished pods are ignored.
 		pod("pay-prod", "job-x", corev1.PodSucceeded, app, nil),
 
-		// A nil selector matches nothing.
+		// A PDB without a selector matches nothing.
 		pdb("plat", "nothing", nil, &one, nil, policyv1.PodDisruptionBudgetStatus{}),
 
 		// Operator-owned members.
@@ -189,7 +188,7 @@ func auditFixture(t *testing.T) *k8s.Client {
 		statefulSet("plat", "sentinel", 3, "bitnami/redis-sentinel:7", map[string]string{"app": "sentinel"}, nil),
 		deployment("plat", "redis", 1, "redis:7", map[string]string{"app": "redis"}),
 		deployment("plat", "redis-exporter", 1, "oliver006/redis_exporter:v1", nil),
-		deployment("plat", "etcd", 1, "quay.io/coreos/etcd:v3", nil), // a Deployment is no member set
+		deployment("plat", "etcd", 1, "quay.io/coreos/etcd:v3", nil), // not a quorum system as a Deployment
 	)
 
 	dyn := newDynamic(t, map[schema.GroupVersionResource][]*unstructured.Unstructured{
@@ -197,8 +196,8 @@ func auditFixture(t *testing.T) *k8s.Client {
 		redisClusterV2: {cr(redisClusterV2, "RedisCluster", "pay-prod", "cache", "rc-uid", map[string]any{"clusterSize": int64(3)})},
 		redisReplV1:    {cr(redisReplV1, "RedisReplication", "plat", "sessions", "rr-uid", map[string]any{"clusterSize": int64(1)})},
 	})
-	notServed(dyn, "redis", "")                    // no standalone Redis CRD at all
-	notServed(dyn, "redisreplications", "v1beta2") // an older operator: v1beta1 only
+	notServed(dyn, "redis", "")                    // standalone Redis not installed
+	notServed(dyn, "redisreplications", "v1beta2") // old operator, v1beta1 only
 	return &k8s.Client{Clientset: cs, Dynamic: dyn}
 }
 

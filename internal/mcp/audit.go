@@ -1,10 +1,8 @@
 package mcp
 
-// Disruption audit: the inventory behind the bot's weekly best-practice report.
-// The server does the joins — pod→PDB overlap, PDB→owning workload, data
-// service→covering PDBs — so the caller never pulls every pod over MCP and the
-// response stays compact. These tools report facts only; deciding what is a
-// finding is the caller's job.
+// Disruption audit: the data behind the bot's weekly best-practice report.
+// Pods are matched to PDBs and owners here, so the caller never has to fetch
+// every pod. The tools only report facts; the caller decides what is a problem.
 
 import (
 	"context"
@@ -26,52 +24,50 @@ import (
 )
 
 const (
-	// Set on namespaces by team-operator from the Team CR's spec.projects.
+	// Namespace labels set by team-operator.
 	labelTeam = "snappcloud.io/team"
 	labelEnv  = "environment"
-	// Lets a team mark a PDB, data-service CR or workload as intentional. The
-	// value (rule IDs) is passed through as-is; the caller interprets it.
+	// Teams set this to silence rules on an object; passed through as-is.
 	annotationIgnore = "snappcloud.io/best-practice-ignore"
 )
 
-// defaultQuorumImages are image keywords of systems whose members hold a
-// quorum: evicting a majority at once takes the whole system down.
+// defaultQuorumImages are image keywords of systems that stop working when
+// most of their members are down at once.
 var defaultQuorumImages = []string{
 	"rabbitmq", "etcd", "zookeeper", "kafka", "consul", "nats", "mongo", "redis-sentinel", "elasticsearch",
 }
 
-// cacheEngines are the brokers/caches detected by image on plain workloads
-// (Bitnami charts, hand-written StatefulSets), reported at any replica count.
+// cacheEngines are the caches and brokers detected by image on workloads
+// that no operator manages.
 var cacheEngines = []string{"redis", "rabbitmq"}
 
-// dataServiceKind is an operator CR whose instances the audit reports.
+// dataServiceKind describes an operator CR the audit reports on.
 type dataServiceKind struct {
 	group, resource, kind, engine string
 	versions                      []string
 	quorum                        bool
-	// replicas is the instance's desired member count.
+	// replicas returns the desired member count.
 	replicas func(*unstructured.Unstructured) int64
-	// member reports whether a StatefulSet the CR owns holds the members that
-	// replicas counts. Nil means any owned StatefulSet does.
+	// member picks which owned StatefulSet holds the members; nil means any.
 	member func(cr, sts string) bool
 }
 
 const opstreeGroup = "redis.redis.opstreelabs.in"
 
-// v1beta2 is the opstree storage version; older operators serve only v1beta1.
+// Older opstree operators serve only v1beta1.
 var opstreeVersions = []string{"v1beta2", "v1beta1"}
 
 var dataServiceKinds = []dataServiceKind{
 	{
 		group: "rabbitmq.com", versions: []string{"v1beta1"}, resource: "rabbitmqclusters",
 		kind: "RabbitmqCluster", engine: "rabbitmq", quorum: true,
-		// spec.replicas defaults to 1 when unset.
+		// Defaults to 1 when unset.
 		replicas: func(o *unstructured.Unstructured) int64 { return nestedInt(o.Object, 1, "spec", "replicas") },
 	},
 	{
 		group: opstreeGroup, versions: opstreeVersions, resource: "redis",
 		kind: "Redis", engine: "redis",
-		// Standalone: one instance by construction.
+		// Standalone Redis always runs one instance.
 		replicas: func(*unstructured.Unstructured) int64 { return 1 },
 	},
 	{
@@ -82,8 +78,7 @@ var dataServiceKinds = []dataServiceKind{
 	{
 		group: opstreeGroup, versions: opstreeVersions, resource: "redisclusters",
 		kind: "RedisCluster", engine: "redis", quorum: true,
-		// The quorum is held by the leaders; redisLeader.replicas overrides
-		// clusterSize when set.
+		// Only leaders count; redisLeader.replicas overrides clusterSize.
 		replicas: func(o *unstructured.Unstructured) int64 {
 			return nestedInt(o.Object, nestedInt(o.Object, 0, "spec", "clusterSize"), "spec", "redisLeader", "replicas")
 		},
@@ -99,8 +94,7 @@ var dataServiceKinds = []dataServiceKind{
 type auditOwner struct {
 	Kind string `json:"kind"`
 	Name string `json:"name"`
-	// APIVersion is set for owners that are not Deployments or StatefulSets
-	// (operator CRs owning pods directly, DaemonSets, Jobs).
+	// Set only for owners that are not Deployments or StatefulSets.
 	APIVersion   string   `json:"apiVersion,omitempty"`
 	Replicas     *int32   `json:"replicas,omitempty"`
 	Images       []string `json:"images,omitempty"`
@@ -132,7 +126,7 @@ type auditInstance struct {
 	Name      string `json:"name"`
 	Engine    string `json:"engine"`
 	Kind      string `json:"kind"`
-	// Workload is the StatefulSet holding an operator instance's members.
+	// The StatefulSet running an operator instance's members.
 	Workload string   `json:"workload,omitempty"`
 	Replicas int64    `json:"replicas"`
 	Quorum   bool     `json:"quorum"`
@@ -147,10 +141,10 @@ type nsOwner struct {
 	Env  string `json:"env,omitempty"`
 }
 
-// ownerRef is a pod's controller, as found on the pod.
+// ownerRef is the controller of a pod.
 type ownerRef struct{ ns, kind, name, apiVersion string }
 
-// workload is the part of a Deployment or StatefulSet the audit needs.
+// workload holds the Deployment or StatefulSet fields the audit uses.
 type workload struct {
 	kind, ns, name string
 	replicas       int32
@@ -178,7 +172,7 @@ func handleDisruptionAudit(ctx context.Context, c *k8s.Client, a args) (any, err
 		}
 	}
 
-	// Phase 1: everything that does not depend on anything else.
+	// Step 1: independent lists, in parallel.
 	var (
 		pdbs         []*auditPDB
 		workloads    []*workload
@@ -206,8 +200,7 @@ func handleDisruptionAudit(ctx context.Context, c *k8s.Client, a args) (any, err
 		byNS[p.Namespace] = append(byNS[p.Namespace], p)
 	}
 
-	// Phase 2: the two big cluster-wide lists, kept only for namespaces that
-	// have a PDB — elsewhere no pod can be covered or overlapped.
+	// Step 2: pods and ReplicaSets, kept only in namespaces that have a PDB.
 	var rsDeployment map[string]string
 	g, gctx = errgroup.WithContext(ctx)
 	g.Go(func() (err error) { rsDeployment, err = listReplicaSetDeployments(gctx, c, byNS); return err })
@@ -216,7 +209,7 @@ func handleDisruptionAudit(ctx context.Context, c *k8s.Client, a args) (any, err
 		return nil, err
 	}
 
-	// Phase 3: joins.
+	// Step 3: join everything together.
 	wlIndex := make(map[string]*workload, len(workloads))
 	ownedSTS := map[types.UID][]*workload{}
 	for _, w := range workloads {
@@ -269,8 +262,7 @@ func handleDisruptionAudit(ctx context.Context, c *k8s.Client, a args) (any, err
 		return a.Kind < b.Kind
 	})
 
-	// Owners of every namespace mentioned, including unlabelled ones (an empty
-	// entry), so the caller can tell "no team" from "not looked up".
+	// Every namespace mentioned gets an entry, empty if it has no team.
 	namespaces := map[string]nsOwner{}
 	for _, p := range pdbs {
 		namespaces[p.Namespace] = nsOwner{Team: nsLabels[p.Namespace][labelTeam], Env: nsLabels[p.Namespace][labelEnv]}
@@ -310,8 +302,8 @@ func listPDBs(ctx context.Context, c *k8s.Client) ([]*auditPDB, error) {
 }
 
 func newAuditPDB(pdb *policyv1.PodDisruptionBudget) *auditPDB {
-	// Same selector semantics as the eviction API: a nil selector matches
-	// nothing, an empty one every pod in the namespace, an invalid one nothing.
+	// Match like eviction does: a missing or invalid selector matches nothing,
+	// an empty one matches every pod in the namespace.
 	sel, err := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
 	if err != nil {
 		sel = labels.Nothing()
@@ -404,8 +396,7 @@ func listNamespaceLabels(ctx context.Context, c *k8s.Client) (map[string]map[str
 	return out, err
 }
 
-// listReplicaSetDeployments maps "ns/replicaset" to the owning Deployment's
-// name, for namespaces that have a PDB.
+// listReplicaSetDeployments maps "ns/replicaset" to its Deployment's name.
 func listReplicaSetDeployments(ctx context.Context, c *k8s.Client, byNS map[string][]*auditPDB) (map[string]string, error) {
 	out := map[string]string{}
 	err := k8s.ListPages(func(opts metav1.ListOptions) (string, error) {
@@ -427,8 +418,8 @@ func listReplicaSetDeployments(ctx context.Context, c *k8s.Client, byNS map[stri
 	return out, err
 }
 
-// scanPods records, on each PDB, the controllers of the pods it selects and
-// the other PDBs selecting the same pods.
+// scanPods records on each PDB the owners of its pods and any other PDB that
+// selects the same pods.
 func scanPods(ctx context.Context, c *k8s.Client, byNS map[string][]*auditPDB) error {
 	return k8s.ListPages(func(opts metav1.ListOptions) (string, error) {
 		list, err := c.Clientset.CoreV1().Pods("").List(ctx, opts)
@@ -458,8 +449,8 @@ func scanPods(ctx context.Context, c *k8s.Client, byNS map[string][]*auditPDB) e
 			for _, p := range matched {
 				p.owners[ref] = true
 			}
-			// Eviction skips the PDB check for pending pods and pods already
-			// being deleted, so only the others can be refused for overlap.
+			// Eviction ignores PDBs for pending and deleting pods, so they
+			// cannot be blocked by an overlap.
 			if len(matched) > 1 && pod.Status.Phase != corev1.PodPending && pod.DeletionTimestamp == nil {
 				for _, p := range matched {
 					for _, q := range matched {
@@ -504,9 +495,8 @@ func resolveOwners(refs map[ownerRef]bool, rsDeployment map[string]string, wlInd
 	return out
 }
 
-// coveringPDBs names the PDBs that select pods with the given template labels.
-// Matching the template rather than live pods keeps the answer right for a
-// member that is down at scan time.
+// coveringPDBs returns the PDBs matching a pod template's labels. Using the
+// template instead of live pods keeps the result stable when a pod is down.
 func coveringPDBs(nsPDBs []*auditPDB, template labels.Set) []string {
 	out := []string{}
 	for _, p := range nsPDBs {
@@ -517,10 +507,8 @@ func coveringPDBs(nsPDBs []*auditPDB, template labels.Set) []string {
 	return out
 }
 
-// imageInstances finds data services run as plain workloads: Deployments and
-// StatefulSets with no controlling owner (operator-managed ones are reported
-// from their CR) whose image names a cache, a broker or a quorum system.
-// Quorum systems count only as StatefulSets — a Deployment is not a member set.
+// imageInstances finds data services that no operator manages, by image name.
+// Only StatefulSets can be quorum systems.
 func imageInstances(workloads []*workload, byNS map[string][]*auditPDB, quorumImages []string) []auditInstance {
 	keywords := slices.Concat(cacheEngines, quorumImages)
 	var out []auditInstance
@@ -545,9 +533,8 @@ func imageInstances(workloads []*workload, byNS map[string][]*auditPDB, quorumIm
 	return out
 }
 
-// detectEngine returns the longest keyword found in an image's name, so
-// "bitnami/redis-sentinel" is redis-sentinel rather than redis. Exporter
-// sidecars are not the service itself and are skipped.
+// detectEngine returns the longest keyword in an image name, so
+// "redis-sentinel" wins over "redis". Exporter images are skipped.
 func detectEngine(images, keywords []string) string {
 	best := ""
 	for _, img := range images {
@@ -564,8 +551,7 @@ func detectEngine(images, keywords []string) string {
 	return best
 }
 
-// imageName strips registry, path, tag and digest: "reg:5000/bitnami/redis:7.2"
-// becomes "redis".
+// imageName turns "reg:5000/bitnami/redis:7.2" into "redis".
 func imageName(image string) string {
 	image, _, _ = strings.Cut(image, "@")
 	if i := strings.LastIndex(image, "/"); i >= 0 {

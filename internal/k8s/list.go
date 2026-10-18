@@ -10,13 +10,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// PageSize is the page size for cluster-wide lists. Large enough to keep the
-// number of round trips low, small enough that one page of pods stays a few MB.
+// PageSize is the number of items fetched per request in cluster-wide lists.
 const PageSize = 500
 
-// ListPages calls list once per page, following continue tokens until the API
-// server has returned everything. Cluster-wide audits use it so their result
-// is never silently truncated by a page limit.
+// ListPages calls list once per page until the server has returned
+// everything, so large lists are never cut short.
 func ListPages(list func(opts metav1.ListOptions) (next string, err error)) error {
 	opts := metav1.ListOptions{Limit: PageSize}
 	for {
@@ -31,10 +29,9 @@ func ListPages(list func(opts metav1.ListOptions) (next string, err error)) erro
 	}
 }
 
-// ListCustom lists a custom resource cluster-wide across every page, trying
-// the versions in order and using the first one the API server serves.
-// installed is false, and err nil, when it serves none of them: the CRD is
-// absent on this cluster, which is a fact to report, not a failure.
+// ListCustom lists a custom resource in all namespaces, using the first of
+// versions the cluster serves. If the CRD is not installed, it returns
+// installed=false and no error.
 func (c *Client) ListCustom(ctx context.Context, group, resource string, versions []string,
 	each func(*unstructured.Unstructured)) (installed bool, err error) {
 	for _, v := range versions {
