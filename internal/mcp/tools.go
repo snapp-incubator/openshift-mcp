@@ -22,6 +22,10 @@ func strEnum(desc string, values ...string) map[string]any {
 	return map[string]any{"type": "string", "description": desc, "enum": vals}
 }
 
+func strArray(desc string) map[string]any {
+	return map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": desc}
+}
+
 func boolean(desc string) map[string]any {
 	return map[string]any{"type": "boolean", "description": desc}
 }
@@ -190,6 +194,26 @@ func buildTools() []tool {
 				"limit":          integer("Maximum items to return (default 100, max 200)."),
 			}, "version", "resource"),
 			handler: handleListResource,
+		},
+		{
+			name: "disruption_audit",
+			description: "Cluster-wide drain-safety inventory, no namespace argument. Returns every PodDisruptionBudget (minAvailable/maxUnavailable, " +
+				"unhealthyPodEvictionPolicy, the controller-computed expectedPods/currentHealthy/desiredHealthy/disruptionsAllowed, the owning " +
+				"workloads with replicas and images, and the other PDBs selecting the same pods); every data-service instance — RabbitmqCluster " +
+				"and opstree Redis CRs, plus plain Deployments/StatefulSets whose image is redis, rabbitmq or a quorum system — with replicas, " +
+				"whether it holds a quorum, and the PDBs covering it; the team/environment of each namespace involved; and the CRDs not " +
+				"installed on this cluster. Facts only: which of these is a problem is for the caller to decide.",
+			schema: objSchema(map[string]any{
+				"quorum_images": strArray("Image keywords that mark a StatefulSet as a quorum system (default: rabbitmq, etcd, zookeeper, " +
+					"kafka, consul, nats, mongo, redis-sentinel, elasticsearch)."),
+			}),
+			handler: handleDisruptionAudit,
+		},
+		{
+			name:        "list_teams",
+			description: "SnappCloud teams (team.snappcloud.io Team CRs): each team's admins and its namespaces with their environment (production/staging).",
+			schema:      objSchema(map[string]any{}),
+			handler:     handleListTeams,
 		},
 	}
 }

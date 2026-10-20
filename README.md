@@ -11,7 +11,7 @@ live pod metrics — summarized for LLM consumption. Built on the official
 diagnoses issues and lets the agent recommend fixes — it never mutates
 cluster state.
 
-## Tools (16)
+## Tools (19)
 
 | Tool | Purpose |
 |------|---------|
@@ -29,9 +29,48 @@ cluster state.
 | `top_pods` | Live CPU/memory per pod (metrics.k8s.io) |
 | `list_nodes` / `get_node` | Node readiness, pressure, taints, capacity |
 | `get_resource` / `list_resource` | Generic read for any CRD/OpenShift kind (within RBAC) |
+| `disruption_audit` | Cluster-wide drain-safety inventory: every PDB with status, owners and overlaps; every RabbitMQ/Redis/quorum-system instance with replicas and covering PDBs |
+| `list_teams` | Team CRs: admins and namespaces with their environment |
 
 Most tools take a required `namespace` — which lets the bot's authorization
 layer enforce the caller's scope on both arguments and results.
+
+`disruption_audit` and `list_teams` are the exception: cluster-wide by design,
+with no namespace to enforce on. The bot marks them `clusterAdminOnly`.
+
+### Disruption audit
+
+`disruption_audit` is the data source for the bot's weekly best-practice report
+(single-instance brokers/caches, drain-blocking and below-quorum PDBs). It
+reports facts; the rules that turn them into findings live in the bot. The
+server does the joins so the caller never pulls every pod:
+
+- **PDBs**: spec (`minAvailable`/`maxUnavailable` exactly as written,
+  `unhealthyPodEvictionPolicy`) and the disruption controller's computed status
+  (`expectedPods`, `currentHealthy`, `desiredHealthy`, `disruptionsAllowed`), so
+  percentages and rounding are already resolved the way eviction resolves them.
+  `owners` are the controllers of the selected pods, with ReplicaSets resolved
+  to their Deployment and with `replicas`, `images` and `operatorKind`.
+  `overlapsWith` lists the other PDBs selecting the same running pod: eviction
+  refuses such a pod outright. Selectors follow eviction semantics (nil matches
+  nothing, `{}` matches the whole namespace), and pending, terminating and
+  finished pods never count as overlap, because eviction does not check them.
+- **Instances**: `RabbitmqCluster` (`spec.replicas`, default 1) and the opstree
+  `Redis`, `RedisReplication`, `RedisCluster` (leaders) and `RedisSentinel` CRs
+  (`source: operator`), plus Deployments and StatefulSets with no controlling
+  owner whose image names `redis`, `rabbitmq` or a quorum image
+  (`source: image`). `quorum_images` overrides the quorum keyword list; only
+  StatefulSets count as quorum systems. `pdbs` is matched against the pod
+  template, so a member that is down at scan time does not change it.
+- **namespaces**: `snappcloud.io/team` and `environment` for every namespace
+  mentioned; an unlabelled one comes back as `{}`.
+- **notInstalled**: CRDs this cluster does not serve. Any other list error,
+  including a forbidden one, fails the call: a partial inventory would read as
+  "nothing wrong".
+
+Every list is paged with `continue` tokens, so nothing is truncated. The
+`snappcloud.io/best-practice-ignore` annotation on a PDB, CR or workload is
+passed through as `ignore`.
 
 ### Redaction
 

@@ -31,6 +31,18 @@ func (a args) boolean(key string) bool {
 	return v
 }
 
+// strs reads a list of strings, skipping empty or non-string values.
+func (a args) strs(key string) []string {
+	raw, _ := a[key].([]any)
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func (a args) intOr(key string, def int) int {
 	switch v := a[key].(type) {
 	case float64:
@@ -163,7 +175,12 @@ Investigation workflows:
 5. Pending pods: get_pod events (FailedScheduling reason), list_nodes/get_node
    (pressure conditions, allocatable), get_quota.
 6. Resource hunger: top_pods (live CPU/memory) vs container requests/limits in get_pod.
-7. Anything else (CRDs, OpenShift objects): get_resource / list_resource with the
+7. Drain blockers and fragile data services (cluster-wide, cluster-admins):
+   disruption_audit lists every PDB with its computed status, owning workloads
+   and overlapping PDBs, plus every RabbitMQ/Redis/quorum-system instance with
+   its replica count and covering PDBs. list_teams maps teams to admins and
+   namespaces.
+8. Anything else (CRDs, OpenShift objects): get_resource / list_resource with the
    exact group/version/resource plural. Available read-only beyond the core kinds:
    batch (cronjobs, jobs), autoscaling (horizontalpodautoscalers),
    autoscaling.k8s.io (verticalpodautoscalers), policy (poddisruptionbudgets),
