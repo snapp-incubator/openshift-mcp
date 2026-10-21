@@ -139,6 +139,12 @@ type auditInstance struct {
 type nsOwner struct {
 	Team string `json:"team,omitempty"`
 	Env  string `json:"env,omitempty"`
+	// Labels lets the caller exclude namespaces by label.
+	Labels map[string]string `json:"labels,omitempty"`
+}
+
+func newNSOwner(labels map[string]string) nsOwner {
+	return nsOwner{Team: labels[labelTeam], Env: labels[labelEnv], Labels: labels}
 }
 
 // ownerRef is the controller of a pod.
@@ -265,10 +271,10 @@ func handleDisruptionAudit(ctx context.Context, c *k8s.Client, a args) (any, err
 	// Every namespace mentioned gets an entry, empty if it has no team.
 	namespaces := map[string]nsOwner{}
 	for _, p := range pdbs {
-		namespaces[p.Namespace] = nsOwner{Team: nsLabels[p.Namespace][labelTeam], Env: nsLabels[p.Namespace][labelEnv]}
+		namespaces[p.Namespace] = newNSOwner(nsLabels[p.Namespace])
 	}
 	for _, inst := range instances {
-		namespaces[inst.Namespace] = nsOwner{Team: nsLabels[inst.Namespace][labelTeam], Env: nsLabels[inst.Namespace][labelEnv]}
+		namespaces[inst.Namespace] = newNSOwner(nsLabels[inst.Namespace])
 	}
 
 	return map[string]any{

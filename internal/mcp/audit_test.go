@@ -267,10 +267,11 @@ func TestDisruptionAuditInstances(t *testing.T) {
 	if !reflect.DeepEqual(res.NotInstalled, []string{"redis." + opstreeGroup}) {
 		t.Errorf("notInstalled = %v, want only the standalone Redis CRD", res.NotInstalled)
 	}
-	if res.Namespaces["pay-prod"] != (nsOwner{Team: "pay", Env: "production"}) {
+	wantPay := nsOwner{Team: "pay", Env: "production", Labels: map[string]string{labelTeam: "pay", labelEnv: "production"}}
+	if !reflect.DeepEqual(res.Namespaces["pay-prod"], wantPay) {
 		t.Errorf("pay-prod owner = %+v", res.Namespaces["pay-prod"])
 	}
-	if o, ok := res.Namespaces["plat"]; !ok || o != (nsOwner{}) {
+	if o, ok := res.Namespaces["plat"]; !ok || !reflect.DeepEqual(o, nsOwner{}) {
 		t.Errorf("unlabelled namespace must be present and empty, got %+v (present=%v)", o, ok)
 	}
 }

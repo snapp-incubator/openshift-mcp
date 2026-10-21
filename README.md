@@ -63,7 +63,8 @@ server does the joins so the caller never pulls every pod:
   StatefulSets count as quorum systems. `pdbs` is matched against the pod
   template, so a member that is down at scan time does not change it.
 - **namespaces**: `snappcloud.io/team` and `environment` for every namespace
-  mentioned; an unlabelled one comes back as `{}`.
+  mentioned, plus all its `labels` so the caller can exclude namespaces by
+  label; an unlabelled one comes back as `{}`.
 - **notInstalled**: CRDs this cluster does not serve. Any other list error,
   including a forbidden one, fails the call: a partial inventory would read as
   "nothing wrong".
