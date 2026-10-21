@@ -106,6 +106,22 @@ K8S_KUBECONFIG=~/.kube/config make run-http   # outside a cluster
 Env: `K8S_KUBECONFIG`, `K8S_CONTEXT`, `K8S_TIMEOUT` (30s), `K8S_QPS` (50),
 `K8S_BURST` (100). In-cluster it uses the ServiceAccount.
 
+### Testing with mcp-cli
+
+`cmd/mcp-cli` is a small MCP client for poking at the server by hand. It talks
+to the HTTP endpoint (`-url`, default `http://localhost:8080/mcp`) or spawns a
+stdio server (`-cmd`). `key=value` arguments are typed from the tool's schema.
+
+```bash
+make cli
+bin/mcp-cli info                                   # server version + instructions
+bin/mcp-cli tools -v                               # tools with input schemas
+bin/mcp-cli call list_pods namespace=default limit=5
+bin/mcp-cli call list_events namespace=default warnings_only=true -raw
+bin/mcp-cli -cmd "bin/openshift-mcp -mcp" call get_pod namespace=default name=web-0
+bin/mcp-cli call list_resource -json '{"group":"batch","version":"v1","resource":"jobs","namespace":"default"}'
+```
+
 ## Deploy
 
 The Helm chart lives in the ArgoCD apps repo at `core/helm/apps/openshift-mcp`
