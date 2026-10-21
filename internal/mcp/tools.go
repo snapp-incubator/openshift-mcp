@@ -140,6 +140,28 @@ func buildTools() []tool {
 			handler: handleGetQuota,
 		},
 		{
+			name: "list_policies",
+			description: "Admission policies (Kyverno) that apply to a kind in a namespace — use it to check a " +
+				"manifest BEFORE it is applied. Each rule shows its action (Enforce: a violating object is " +
+				"rejected; Audit: admitted and reported), message, and check (the rule's pattern, deny " +
+				"conditions or CEL as JSON). Pod rules also apply to Deployments, StatefulSets, Jobs etc. " +
+				"(applies_via). only_if marks a rule that depends on the object's name or labels.",
+			schema: objSchema(map[string]any{
+				"namespace": str(nsDesc),
+				"kind":      str("Kind to check, e.g. Deployment, Service, HTTPProxy. Omit for every kind."),
+			}, "namespace"),
+			handler: handleListPolicies,
+		},
+		{
+			name: "get_policy_report",
+			description: "Policy violations already reported in a namespace (Kyverno policy reports): " +
+				"failed, errored and warned results per object, worst first, with totals.",
+			schema: objSchema(map[string]any{
+				"namespace": str(nsDesc),
+			}, "namespace"),
+			handler: handleGetPolicyReport,
+		},
+		{
 			name:        "top_pods",
 			description: "Live CPU (millicores) and memory (Mi) usage per pod in a namespace via metrics.k8s.io, sorted by CPU. Compare against requests/limits from get_pod.",
 			schema: objSchema(map[string]any{

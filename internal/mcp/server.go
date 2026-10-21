@@ -180,7 +180,13 @@ Investigation workflows:
    and overlapping PDBs, plus every RabbitMQ/Redis/quorum-system instance with
    its replica count and covering PDBs. list_teams maps teams to admins and
    namespaces.
-8. Anything else (CRDs, OpenShift objects): get_resource / list_resource with the
+8. Before a manifest is applied, or when one was rejected: list_policies with the
+   namespace and kind gives every admission rule that applies, Enforce (rejects) or
+   Audit (reports), with its check. Compare the manifest against each; only_if
+   marks rules that depend on the object's labels or name. get_policy_report shows
+   violations already recorded in the namespace. The authoritative check is a
+   server-side dry run (oc apply --dry-run=server), which the user runs.
+9. Anything else (CRDs, OpenShift objects): get_resource / list_resource with the
    exact group/version/resource plural. Available read-only beyond the core kinds:
    batch (cronjobs, jobs), autoscaling (horizontalpodautoscalers),
    autoscaling.k8s.io (verticalpodautoscalers), policy (poddisruptionbudgets),
@@ -188,8 +194,7 @@ Investigation workflows:
    cilium.io (ciliumnetworkpolicies, ciliumendpoints), monitoring.coreos.com and
    operator.victoriametrics.com scrape/rule DEFINITIONS (servicemonitors,
    podmonitors, prometheusrules, probes, vmrules, vmservicescrapes,
-   vmpodscrapes, vmprobes), kyverno.io + wgpolicyk8s.io (policies and
-   policyreports — why a resource was rejected or flagged), argoproj.io
+   vmpodscrapes, vmprobes), argoproj.io
    (applications, appprojects, rollouts), cert-manager.io (certificates,
    certificaterequests), quota.openshift.io, s3.snappcloud.io, and the main
    managed data services (postgresql.cnpg.io, kafka.strimzi.io, rabbitmq.com

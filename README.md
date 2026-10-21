@@ -26,6 +26,8 @@ cluster state.
 | `list_certificates` | Cert expiry from TLS secrets: subject/issuer/SANs/notAfter/days_left (public cert only, never keys). Needs secret-read Role in the namespace |
 | `list_pvcs` | PVC phase/capacity/class |
 | `get_quota` | ResourceQuota usage + LimitRanges |
+| `list_policies` | Kyverno rules that apply to a kind in a namespace — Enforce/Audit, message, check — for validating a manifest before applying it. Match/exclude are evaluated server-side, so other namespaces are never named |
+| `get_policy_report` | Violations recorded in a namespace's policy reports, failures first |
 | `top_pods` | Live CPU/memory per pod (metrics.k8s.io) |
 | `list_nodes` / `get_node` | Node readiness, pressure, taints, capacity |
 | `get_resource` / `list_resource` | Generic read for any CRD/OpenShift kind (within RBAC) |

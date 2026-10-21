@@ -57,8 +57,8 @@ func TestToolsRegistered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(res.Tools) != 19 {
-		t.Errorf("got %d tools, want 19", len(res.Tools))
+	if len(res.Tools) != 21 {
+		t.Errorf("got %d tools, want 21", len(res.Tools))
 	}
 	names := map[string]bool{}
 	for _, tool := range res.Tools {
@@ -70,6 +70,7 @@ func TestToolsRegistered(t *testing.T) {
 		"list_pvcs", "get_quota", "top_pods", "list_nodes", "get_node",
 		"get_resource", "list_resource", "list_certificates",
 		"disruption_audit", "list_teams",
+		"list_policies", "get_policy_report",
 	} {
 		if !names[want] {
 			t.Errorf("missing tool %s", want)
