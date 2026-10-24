@@ -63,7 +63,10 @@ server does the joins so the caller never pulls every pod:
   owner whose image names `redis`, `rabbitmq` or a quorum image
   (`source: image`). `quorum_images` overrides the quorum keyword list; only
   StatefulSets count as quorum systems. `pdbs` is matched against the pod
-  template, so a member that is down at scan time does not change it.
+  template, so a member that is down at scan time does not change it. A
+  Bitnami release in replication mode (a `master` and a `replica` StatefulSet
+  sharing `app.kubernetes.io/instance`) is one instance: the master, with the
+  replica StatefulSet as `replicaWorkload` and its size as `readReplicas`.
 - **namespaces**: `snappcloud.io/team` and `environment` for every namespace
   mentioned, plus all its `labels` so the caller can exclude namespaces by
   label; an unlabelled one comes back as `{}`.

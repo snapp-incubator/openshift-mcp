@@ -156,6 +156,14 @@ func auditFixture(t *testing.T) *k8s.Client {
 	apiDeploy := deployment("pay-prod", "api", 1, "registry.local/pay/api:1", app)
 	apiDeploy.Annotations = map[string]string{annotationIgnore: "pdb-overlap"}
 
+	// Bitnami Redis releases in replication mode, without Sentinel: one with
+	// read replicas, one with its replicas scaled to 0.
+	bitnami := func(release, component, suffix string, replicas int32) *appsv1.StatefulSet {
+		s := statefulSet("plat", release+"-"+suffix, replicas, "bitnami/redis:8.0", nil, nil)
+		s.Labels = map[string]string{labelAppName: "redis", labelInstance: release, labelComponent: component}
+		return s
+	}
+
 	cs := fake.NewSimpleClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "pay-prod", Labels: map[string]string{labelTeam: "pay", labelEnv: "production"}}},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "plat"}},
@@ -189,6 +197,8 @@ func auditFixture(t *testing.T) *k8s.Client {
 		deployment("plat", "redis", 1, "redis:7", map[string]string{"app": "redis"}),
 		deployment("plat", "redis-exporter", 1, "oliver006/redis_exporter:v1", nil),
 		deployment("plat", "etcd", 1, "quay.io/coreos/etcd:v3", nil), // not a quorum system as a Deployment
+		bitnami("push", "master", "master", 1), bitnami("push", "replica", "replicas", 2),
+		bitnami("poll", "master", "master", 1), bitnami("poll", "replica", "replicas", 0),
 	)
 
 	dyn := newDynamic(t, map[schema.GroupVersionResource][]*unstructured.Unstructured{
@@ -258,6 +268,13 @@ func TestDisruptionAuditInstances(t *testing.T) {
 			Replicas: 3, Quorum: true, Source: "image", PDBs: []string{}, Images: []string{"bitnami/redis-sentinel:7"}},
 		"plat/redis/Deployment": {Namespace: "plat", Name: "redis", Engine: "redis", Kind: "Deployment",
 			Replicas: 1, Source: "image", PDBs: []string{}, Images: []string{"redis:7"}},
+		// The replica StatefulSets are folded into their master.
+		"plat/push-master/StatefulSet": {Namespace: "plat", Name: "push-master", Engine: "redis", Kind: "StatefulSet",
+			Replicas: 1, ReadReplicas: 2, ReplicaWorkload: "push-replicas", Source: "image", PDBs: []string{},
+			Images: []string{"bitnami/redis:8.0"}},
+		"plat/poll-master/StatefulSet": {Namespace: "plat", Name: "poll-master", Engine: "redis", Kind: "StatefulSet",
+			Replicas: 1, ReplicaWorkload: "poll-replicas", Source: "image", PDBs: []string{},
+			Images: []string{"bitnami/redis:8.0"}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		gb, _ := json.MarshalIndent(got, "", "  ")

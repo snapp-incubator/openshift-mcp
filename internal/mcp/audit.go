@@ -29,6 +29,11 @@ const (
 	labelEnv  = "environment"
 	// Teams set this to silence rules on an object; passed through as-is.
 	annotationIgnore = "snappcloud.io/best-practice-ignore"
+	// Labels Helm charts set on their workloads. Bitnami's replication
+	// architecture runs a "master" and a "replica" StatefulSet per release.
+	labelAppName   = "app.kubernetes.io/name"
+	labelInstance  = "app.kubernetes.io/instance"
+	labelComponent = "app.kubernetes.io/component"
 )
 
 // defaultQuorumImages are image keywords of systems that stop working when
@@ -127,13 +132,17 @@ type auditInstance struct {
 	Engine    string `json:"engine"`
 	Kind      string `json:"kind"`
 	// The StatefulSet running an operator instance's members.
-	Workload string   `json:"workload,omitempty"`
-	Replicas int64    `json:"replicas"`
-	Quorum   bool     `json:"quorum"`
-	Source   string   `json:"source"`
-	PDBs     []string `json:"pdbs"`
-	Images   []string `json:"images,omitempty"`
-	Ignore   string   `json:"ignore,omitempty"`
+	Workload string `json:"workload,omitempty"`
+	Replicas int64  `json:"replicas"`
+	// Read-only replicas of a Bitnami master, run by ReplicaWorkload. They
+	// do not take over when the master is down: that needs Sentinel.
+	ReadReplicas    int64    `json:"readReplicas,omitempty"`
+	ReplicaWorkload string   `json:"replicaWorkload,omitempty"`
+	Quorum          bool     `json:"quorum"`
+	Source          string   `json:"source"`
+	PDBs            []string `json:"pdbs"`
+	Images          []string `json:"images,omitempty"`
+	Ignore          string   `json:"ignore,omitempty"`
 }
 
 type nsOwner struct {
@@ -155,6 +164,7 @@ type workload struct {
 	kind, ns, name string
 	replicas       int32
 	images         []string
+	labels         map[string]string
 	template       labels.Set
 	controller     *metav1.OwnerReference
 	ignore         string
@@ -368,6 +378,7 @@ func listAuditWorkloads(ctx context.Context, c *k8s.Client) ([]*workload, error)
 func newWorkload(kind string, meta *metav1.ObjectMeta, replicas *int32, tmpl *corev1.PodTemplateSpec) *workload {
 	w := &workload{
 		kind: kind, ns: meta.Namespace, name: meta.Name, replicas: 1,
+		labels:     meta.Labels,
 		template:   labels.Set(tmpl.Labels),
 		controller: metav1.GetControllerOfNoCopy(meta),
 		ignore:     meta.Annotations[annotationIgnore],
@@ -514,12 +525,18 @@ func coveringPDBs(nsPDBs []*auditPDB, template labels.Set) []string {
 }
 
 // imageInstances finds data services that no operator manages, by image name.
-// Only StatefulSets can be quorum systems.
+// Only StatefulSets can be quorum systems. A Bitnami replica StatefulSet is
+// reported on its master's instance, not as an instance of its own.
 func imageInstances(workloads []*workload, byNS map[string][]*auditPDB, quorumImages []string) []auditInstance {
 	keywords := slices.Concat(cacheEngines, quorumImages)
+	replicaOf := bitnamiReplicas(workloads)
+	folded := map[*workload]bool{}
+	for _, r := range replicaOf {
+		folded[r] = true
+	}
 	var out []auditInstance
 	for _, w := range workloads {
-		if w.controller != nil {
+		if w.controller != nil || folded[w] {
 			continue
 		}
 		engine := detectEngine(w.images, keywords)
@@ -530,11 +547,39 @@ func imageInstances(workloads []*workload, byNS map[string][]*auditPDB, quorumIm
 		if !quorum && !slices.Contains(cacheEngines, engine) {
 			continue
 		}
-		out = append(out, auditInstance{
+		inst := auditInstance{
 			Namespace: w.ns, Name: w.name, Engine: engine, Kind: w.kind,
 			Replicas: int64(w.replicas), Quorum: quorum, Source: "image",
 			PDBs: coveringPDBs(byNS[w.ns], w.template), Images: w.images, Ignore: w.ignore,
-		})
+		}
+		if r := replicaOf[w]; r != nil {
+			inst.ReadReplicas, inst.ReplicaWorkload = int64(r.replicas), r.name
+		}
+		out = append(out, inst)
+	}
+	return out
+}
+
+// bitnamiReplicas maps the master StatefulSet of each Bitnami release in
+// replication mode to the release's replica StatefulSet.
+func bitnamiReplicas(workloads []*workload) map[*workload]*workload {
+	release := func(w *workload) string {
+		if w.kind != "StatefulSet" || w.controller != nil || w.labels[labelInstance] == "" {
+			return ""
+		}
+		return w.ns + "/" + w.labels[labelAppName] + "/" + w.labels[labelInstance]
+	}
+	masters := map[string]*workload{}
+	for _, w := range workloads {
+		if k := release(w); k != "" && w.labels[labelComponent] == "master" {
+			masters[k] = w
+		}
+	}
+	out := map[*workload]*workload{}
+	for _, w := range workloads {
+		if k := release(w); k != "" && w.labels[labelComponent] == "replica" && masters[k] != nil {
+			out[masters[k]] = w
+		}
 	}
 	return out
 }
