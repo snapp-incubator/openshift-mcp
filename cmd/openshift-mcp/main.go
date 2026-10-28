@@ -1,6 +1,7 @@
 // Command openshift-mcp is a read-only OpenShift/Kubernetes observability MCP
 // server: pods, workloads, services, routes, events, logs, quotas, and nodes,
-// summarized for AI agents. It never mutates cluster state.
+// summarized for AI agents. Its /mcp tools never mutate cluster state; the
+// optional /debug/mcp endpoint starts debug pods as the caller.
 package main
 
 import (
@@ -15,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/snapp-incubator/openshift-mcp/internal/debugpod"
 	"github.com/snapp-incubator/openshift-mcp/internal/k8s"
 	"github.com/snapp-incubator/openshift-mcp/internal/mcp"
 	"github.com/snapp-incubator/openshift-mcp/internal/version"
@@ -45,10 +47,29 @@ func main() {
 		}
 		return
 	}
-	runHTTP(ctx, srv, client, log, *httpAddr)
+	dbg, err := debugServer(client, log)
+	if err != nil {
+		log.Error("debug pods", "err", err)
+		os.Exit(1)
+	}
+	runHTTP(ctx, srv, dbg, client, log, *httpAddr)
 }
 
-func runHTTP(ctx context.Context, srv *mcp.Server, client *k8s.Client, log *slog.Logger, addr string) {
+// debugServer builds the debug pod endpoint when DEBUG_POD_ENABLED=true.
+func debugServer(client *k8s.Client, log *slog.Logger) (*mcp.DebugServer, error) {
+	cfg, err := debugpod.ConfigFromEnv()
+	if err != nil || !cfg.Enabled {
+		return nil, err
+	}
+	token := os.Getenv("DEBUG_POD_TOKEN")
+	if len(token) < 32 {
+		return nil, fmt.Errorf("DEBUG_POD_TOKEN must be at least 32 characters when debug pods are enabled")
+	}
+	log.Info("debug pods enabled", "image", cfg.Image, "lifetime", cfg.Lifetime, "endpoint", "/debug/mcp")
+	return mcp.NewDebugServer(debugpod.New(cfg, client.Rest, client.Clientset), token, log), nil
+}
+
+func runHTTP(ctx context.Context, srv *mcp.Server, dbg *mcp.DebugServer, client *k8s.Client, log *slog.Logger, addr string) {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -80,6 +101,9 @@ func runHTTP(ctx context.Context, srv *mcp.Server, client *k8s.Client, log *slog
 		_ = json.NewEncoder(w).Encode(map[string]string{"version": version.String()})
 	})
 	mux.Handle("/mcp", srv.HTTPHandler())
+	if dbg != nil {
+		mux.Handle("/debug/mcp", dbg.HTTPHandler())
+	}
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 	})

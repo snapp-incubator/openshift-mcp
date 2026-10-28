@@ -7,9 +7,9 @@ live pod metrics — summarized for LLM consumption. Built on the official
 [MCP Go SDK](https://github.com/modelcontextprotocol/go-sdk)
 (streamable-HTTP, stateless).
 
-**Strictly read-only.** The ClusterRole grants only `get`/`list`; the server
-diagnoses issues and lets the agent recommend fixes — it never mutates
-cluster state.
+**Read-only on `/mcp`.** The ClusterRole grants only `get`/`list`; the server
+diagnoses issues and lets the agent recommend fixes. The optional debug pod
+endpoint (below, off by default) is the one exception, and it acts as the user.
 
 ## Tools (19)
 
@@ -121,3 +121,49 @@ restricted to the ingress namespace) and is registered in
 `newcluster-bootstrap`. Add each deployed region to the bot's
 `agent.clusters[].servers` as `- name: k8s`. Extra CRDs can be exposed through
 `get_resource`/`list_resource` via read-only rules in `rbac.extraRules`.
+
+## Debug pods (`/debug/mcp`, optional)
+
+A short-lived pod in a tenant namespace with network tools, for checks that
+need to run *from* that namespace (DNS, connectivity, TLS, policy). Off unless
+`DEBUG_POD_ENABLED=true`.
+
+| Tool | Purpose |
+|------|---------|
+| `debug_pod_start` | Create the pod in a namespace and wait until it runs (or report why it cannot) |
+| `debug_pod_exec` | Run one shell command in it and return the output |
+| `debug_pod_finish` | Make it exit; it is then deleted automatically |
+| `debug_pod_list` | The caller's debug pods in a namespace |
+
+- **As the caller.** Every API call impersonates the user in `X-Remote-User`
+  (with their OpenShift groups), so their RBAC decides and the audit log names
+  them. ServiceAccounts and `system:` users are refused. The endpoint requires
+  its own bearer token (`DEBUG_POD_TOKEN`, 32+ characters), because whoever
+  holds it may name any user. The ServiceAccount needs `impersonate` on users
+  and groups, and `list` on `user.openshift.io` groups.
+- **Create-only.** The pod is a Job (`backoffLimit: 0`,
+  `activeDeadlineSeconds`, `ttlSecondsAfterFinished`). Finish touches a file
+  the pod waits on, so it exits 0; the Job controller deletes Job and pod. The
+  caller needs `create` on `jobs` and `pods/exec` (the default `edit` role),
+  never `delete`. A pod that is never finished stops at its deadline.
+- **Only its own pods.** Exec and finish reach only a running pod labelled
+  `snappcloud.io/debug-pod=true` whose `snappcloud.io/requested-by` is the
+  caller.
+- **Starts now or says why.** Small requests equal to limits, `IfNotPresent`
+  pull, optional `priorityClassName`. Quota refusals, `FailedScheduling` and
+  image pull errors are returned as soon as they appear.
+- **Locked down.** Non-root, all capabilities dropped (no ping or tcpdump),
+  no privilege escalation, no ServiceAccount token, RuntimeDefault seccomp.
+
+| Env | Default | |
+|-----|---------|--|
+| `DEBUG_POD_ENABLED` | `false` | |
+| `DEBUG_POD_IMAGE` | — | required when enabled; needs `sh` and the tools (e.g. netshoot) |
+| `DEBUG_POD_TOKEN` | — | required when enabled |
+| `DEBUG_POD_CPU` / `DEBUG_POD_MEMORY` | `200m` / `256Mi` | request = limit |
+| `DEBUG_POD_LIFETIME` | `15m` | `activeDeadlineSeconds` |
+| `DEBUG_POD_TTL` | `30s` | `ttlSecondsAfterFinished` |
+| `DEBUG_POD_START_TIMEOUT` | `60s` | how long start waits for Running |
+| `DEBUG_POD_EXEC_TIMEOUT` | `60s` | per command, also the maximum |
+| `DEBUG_POD_MAX_OUTPUT` | `65536` | bytes per command |
+| `DEBUG_POD_PRIORITY_CLASS` | — | optional |

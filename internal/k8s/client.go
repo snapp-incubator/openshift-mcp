@@ -49,12 +49,15 @@ func ConfigFromEnv() *Config {
 	return cfg
 }
 
-// Client bundles the typed and dynamic Kubernetes clients. All tool access is
-// read-only; write verbs are never used (and the ServiceAccount's ClusterRole
-// must not grant them).
+// Client bundles the typed and dynamic Kubernetes clients. The tools on /mcp
+// are read-only and the ServiceAccount's ClusterRole grants no write verbs.
+// Debug pods (/debug/mcp, off by default) are created as the caller through
+// impersonation, so the caller's own RBAC decides.
 type Client struct {
 	Clientset kubernetes.Interface
 	Dynamic   dynamic.Interface
+	// Rest is the base config, for clients that act as the caller (debug pods).
+	Rest *rest.Config
 }
 
 // New builds the clients: explicit kubeconfig/context when set, then
@@ -88,7 +91,7 @@ func New(cfg *Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create dynamic client: %w", err)
 	}
-	return &Client{Clientset: cs, Dynamic: dyn}, nil
+	return &Client{Clientset: cs, Dynamic: dyn, Rest: restCfg}, nil
 }
 
 func restConfig(cfg *Config) (*rest.Config, error) {
